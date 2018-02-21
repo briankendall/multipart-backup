@@ -5,6 +5,7 @@ import sys
 import os
 import threading
 from queue import Queue
+import time
 
 _nullBlock = '\0'
 
@@ -29,6 +30,25 @@ def isFileAllZeros(path, blockSize):
     
     return True
 
+def humanReadableSize(bytes):
+    if bytes < 1024:
+        return '%db' % bytes
+    elif bytes < (1024*1024):
+        return '%.1fK' % (bytes / 1024)
+    elif bytes < (1024*1024*1024):
+        return '%.1fM' % (bytes / (1024*1024))
+    else:
+        return '%.1fG' % (bytes / (1024*1024*1024))
+
+def outputStatus(str, lastSize):
+    if len(str) < lastSize:
+        str = str + (' ' * (lastSize-len(str)))
+    
+    sys.stdout.write(str + '\r')
+    sys.stdout.flush()
+    
+    return len(str)
+
 class CopyThread(threading.Thread):
     def __init__(self, source, dest, partSize, blockSize, queue):
         super(CopyThread, self).__init__()
@@ -39,12 +59,26 @@ class CopyThread(threading.Thread):
         self.queue = queue
     
     def run(self):
+        timingSamples = 5
+        timings = []
+        averageSpeed = None
+        
         partBlockCount = self.partSize // self.blockSize
         index = 0
+        lastStatusSize = 0
         
         while True:
+            startTime = time.time()
+            
             partPath = os.path.join(self.dest, 'part_%08d' % index)
-            sys.stdout.write("Copying part index %s to: %s\n" % (index, partPath))
+            
+            if averageSpeed is not None:
+                lastSize = outputStatus("Copying part index %s to: %s ... speed: %s/sec" %
+                                        (index, partPath, humanReadableSize(averageSpeed)), lastStatusSize)
+            else:
+                lastSize = outputStatus("Copying part index %s to: %s ..." % (index, partPath), lastStatusSize)
+            
+            sys.stdout.flush()
             
             status = call(['dd', 'if=%s' % self.source, 'of=%s' % partPath, 'bs=%s' % self.blockSize, 'count=%s' % partBlockCount,
                            'skip=%s' % (index*partBlockCount)], stdout=PIPE, stderr=PIPE)
@@ -62,10 +96,17 @@ class CopyThread(threading.Thread):
             
             index += 1
             
+            endTime = time.time()
+            timings.append(endTime-startTime)
+            
+            if len(timings) >= timingSamples:
+                timings = timings[-timingSamples:] 
+                averageSpeed = (self.partSize * timingSamples) / sum(timings)
+            
             if index > 50:
                 break
         
-        sys.stdout.write("Done copying!\n")
+        sys.stdout.write("\n")
         self.queue.put('')
 
 class CompressThread(threading.Thread):
@@ -82,7 +123,7 @@ class CompressThread(threading.Thread):
             if len(partPath) == 0:
                 break
             
-            sys.stdout.write('Checking if part is all zeros: %s\n' % partPath)
+            # sys.stdout.write('Checking if part is all zeros: %s\n' % partPath)
             
             stats = os.stat(partPath)
             
@@ -91,12 +132,10 @@ class CompressThread(threading.Thread):
                 continue
             
             if isFileAllZeros(partPath, self.blockSize):
-                sys.stdout.write('... %s is null!\n' % partPath)
+                # sys.stdout.write('... %s is null!\n' % partPath)
                 
                 with open(partPath, 'wb') as f:
                     pass
-        
-        sys.stdout.write("Done processing!\n")
         
 
 def backup(source, dest, partSize, blockSize):

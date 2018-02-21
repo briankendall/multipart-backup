@@ -58,6 +58,12 @@ def humanReadableSize(bytes):
     else:
         return '%.1fG' % (bytes / (1024*1024*1024))
 
+def partPathAtIndex(dest, index):
+    return os.path.join(dest, 'part_%08d' % index)
+    
+def newPartPathAtIndex(dest, index):
+    return os.path.join(dest, 'part_%08d.new' % index)
+
 def outputStatus(str, lastSize):
     if len(str) < lastSize:
         str = str + (' ' * (lastSize-len(str)))
@@ -75,6 +81,7 @@ class CopyThread(threading.Thread):
         self.partSize = partSize
         self.blockSize = blockSize
         self.queue = queue
+        self.totalParts = 0
     
     def run(self):
         try:
@@ -89,14 +96,12 @@ class CopyThread(threading.Thread):
             while True:
                 startTime = time.time()
                 
-                partPath = os.path.join(self.dest, 'part_%08d.new' % index)
+                partPath = newPartPathAtIndex(self.dest, index)
                 
                 if averageSpeed is not None:
-                    lastSize = outputStatus("Copying part %s ... speed: %s/sec" % (index+1, humanReadableSize(averageSpeed)), lastStatusSize)
+                    lastStatusSize = outputStatus("Copying part %s ... speed: %s/sec" % (index+1, humanReadableSize(averageSpeed)), lastStatusSize)
                 else:
-                    lastSize = outputStatus("Copying part %s ..." % (index+1), lastStatusSize)
-                
-                sys.stdout.flush()
+                    lastStatusSize = outputStatus("Copying part %s ..." % (index+1), lastStatusSize)
                 
                 p = Popen(['dd', 'if=%s' % self.source, 'of=%s' % partPath, 'bs=%s' % self.blockSize, 'count=%s' % partBlockCount,
                                'skip=%s' % (index*partBlockCount)], stdout=PIPE, stderr=PIPE)
@@ -106,10 +111,16 @@ class CopyThread(threading.Thread):
                     sys.stderr.write('dd failed! Output:\n%s\n' % err)
                     raise DDError('dd failed on index %s with status %s' % (index, p.returncode))
                 
-                self.queue.put(partPath)
-                stats = os.stat(partPath)
+                partSize = os.stat(partPath).st_size
                 
-                if stats.st_size != self.partSize:
+                if partSize == 0:
+                    os.remove(partPath)
+                    break
+                
+                self.totalParts += 1
+                self.queue.put(partPath)
+                
+                if partSize != self.partSize:
                     break
                 
                 index += 1
@@ -173,6 +184,16 @@ class CompareThread(threading.Thread):
                 with open(prevPartPath, 'wb') as f:
                     pass
 
+def removeExcessPartsInDestStartingAtIndex(dest, index):
+    deletedFiles = 0
+    
+    while os.path.exists(partPathAtIndex(dest, index)):
+        os.remove(partPathAtIndex(dest, index))
+        index += 1
+        deletedFiles += 1
+    
+    return deletedFiles
+
 def backup(source, dest, partSize, blockSize):
     if partSize % blockSize != 0:
         raise ValueError('Part size must be integer multiple of block size')
@@ -185,7 +206,10 @@ def backup(source, dest, partSize, blockSize):
     
     copyThread.join()
     compareThread.join()
-    sys.stdout.write("Finished. Changed files: %s\n" % compareThread.changedFiles)
+    
+    deletedFiles = removeExcessPartsInDestStartingAtIndex(dest, copyThread.totalParts)
+    
+    sys.stdout.write("Finished. Changed files: %s\n" % (compareThread.changedFiles + deletedFiles))
 
 
 def main():
@@ -194,8 +218,11 @@ def main():
     parser.add_argument('dest', help="Destination folder for multi-part backup")
     args = parser.parse_args()
 
-    partSize = 100 * 1024 * 1024
-    blockSize = 1024 * 1024
+    # partSize = 100 * 1024 * 1024
+    # blockSize = 1024 * 1024
+    
+    partSize = 10
+    blockSize = 10
     
     try:
         backup(args.source, args.dest, partSize, blockSize)

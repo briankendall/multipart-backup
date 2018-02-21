@@ -9,6 +9,9 @@ import time
 
 _nullBlock = '\0'
 
+class DDError(Exception):
+    pass
+
 def isFileAllZeros(path, blockSize):
     global _nullBlock
     
@@ -29,6 +32,21 @@ def isFileAllZeros(path, blockSize):
                 return False
     
     return True
+
+def areFilesIdentical(path1, path2, blockSize):
+    with open(path1, 'rb') as f1:
+        with open(path2, 'rb') as f2:
+            while True:
+                block1 = f1.read(blockSize)
+                block2 = f2.read(blockSize)
+                
+                if block1 != block2:
+                    return False
+                
+                if len(block1) == 0:
+                    break
+    
+    return True    
 
 def humanReadableSize(bytes):
     if bytes < 1024:
@@ -59,84 +77,101 @@ class CopyThread(threading.Thread):
         self.queue = queue
     
     def run(self):
-        timingSamples = 5
-        timings = []
-        averageSpeed = None
-        
-        partBlockCount = self.partSize // self.blockSize
-        index = 0
-        lastStatusSize = 0
-        
-        while True:
-            startTime = time.time()
+        try:
+            timingSamples = 5
+            timings = []
+            averageSpeed = None
             
-            partPath = os.path.join(self.dest, 'part_%08d' % index)
+            partBlockCount = self.partSize // self.blockSize
+            index = 0
+            lastStatusSize = 0
             
-            if averageSpeed is not None:
-                lastSize = outputStatus("Copying part index %s to: %s ... speed: %s/sec" %
-                                        (index, partPath, humanReadableSize(averageSpeed)), lastStatusSize)
-            else:
-                lastSize = outputStatus("Copying part index %s to: %s ..." % (index, partPath), lastStatusSize)
+            while True:
+                startTime = time.time()
+                
+                partPath = os.path.join(self.dest, 'part_%08d.new' % index)
+                
+                if averageSpeed is not None:
+                    lastSize = outputStatus("Copying part %s ... speed: %s/sec" % (index+1, humanReadableSize(averageSpeed)), lastStatusSize)
+                else:
+                    lastSize = outputStatus("Copying part %s ..." % (index+1), lastStatusSize)
+                
+                sys.stdout.flush()
+                
+                p = Popen(['dd', 'if=%s' % self.source, 'of=%s' % partPath, 'bs=%s' % self.blockSize, 'count=%s' % partBlockCount,
+                               'skip=%s' % (index*partBlockCount)], stdout=PIPE, stderr=PIPE)
+                out, err = p.communicate()
+                
+                if p.returncode != 0:
+                    sys.stderr.write('dd failed! Output:\n%s\n' % err)
+                    raise DDError('dd failed on index %s with status %s' % (index, p.returncode))
+                
+                self.queue.put(partPath)
+                stats = os.stat(partPath)
+                
+                if stats.st_size != self.partSize:
+                    break
+                
+                index += 1
+                
+                endTime = time.time()
+                timings.append(endTime-startTime)
+                
+                if len(timings) >= timingSamples:
+                    timings = timings[-timingSamples:] 
+                    averageSpeed = (self.partSize * timingSamples) / sum(timings)
+                
+                if index > 50:
+                    break
             
-            sys.stdout.flush()
-            
-            status = call(['dd', 'if=%s' % self.source, 'of=%s' % partPath, 'bs=%s' % self.blockSize, 'count=%s' % partBlockCount,
-                           'skip=%s' % (index*partBlockCount)], stdout=PIPE, stderr=PIPE)
-            
-            if status != 0:
-                #TODO: what do I do?!
-                sys.stderr.write('dd failed!\n')
-                break
-            
-            self.queue.put(partPath)
-            stats = os.stat(partPath)
-            
-            if stats.st_size != self.partSize:
-                break
-            
-            index += 1
-            
-            endTime = time.time()
-            timings.append(endTime-startTime)
-            
-            if len(timings) >= timingSamples:
-                timings = timings[-timingSamples:] 
-                averageSpeed = (self.partSize * timingSamples) / sum(timings)
-            
-            if index > 50:
-                break
-        
-        sys.stdout.write("\n")
-        self.queue.put('')
+            sys.stdout.write("\n")
+        finally:
+            self.queue.put('')
 
-class CompressThread(threading.Thread):
+class CompareThread(threading.Thread):
     def __init__(self, partSize, blockSize, queue):
-        super(CompressThread, self).__init__()
+        super(CompareThread, self).__init__()
         self.queue = queue
         self.partSize = partSize
         self.blockSize = blockSize
+        self.changedFiles = 0
+    
+    def areOldAndNewPartsIdentical(self, prevPartPath, newPartPath):
+        newPartSize = os.stat(newPartPath).st_size
+        prevPartSize = os.stat(prevPartPath).st_size
+        
+        if prevPartSize == 0 and isFileAllZeros(newPartPath, self.blockSize):
+            return True
+        else:
+            return areFilesIdentical(prevPartPath, newPartPath, self.blockSize)
     
     def run(self):
         while True:
-            partPath = self.queue.get()
+            newPartPath = self.queue.get()
             
-            if len(partPath) == 0:
+            if len(newPartPath) == 0:
                 break
             
-            # sys.stdout.write('Checking if part is all zeros: %s\n' % partPath)
+            prevPartPath = os.path.splitext(newPartPath)[0]
             
-            stats = os.stat(partPath)
+            if os.path.exists(prevPartPath):
+                if self.areOldAndNewPartsIdentical(prevPartPath, newPartPath):
+                    os.remove(newPartPath)
+                    continue
+                else:
+                    os.remove(prevPartPath)
+            
+            os.rename(newPartPath, prevPartPath)
+            self.changedFiles += 1
             
             # Only want to consider files that are of size partSize
-            if stats.st_size != self.partSize:
+            if os.stat(prevPartPath).st_size != self.partSize:
                 continue
             
-            if isFileAllZeros(partPath, self.blockSize):
-                # sys.stdout.write('... %s is null!\n' % partPath)
-                
-                with open(partPath, 'wb') as f:
+            if isFileAllZeros(prevPartPath, self.blockSize):
+                # Blank out file, signaling that its size is blockSize and it is all zeros
+                with open(prevPartPath, 'wb') as f:
                     pass
-        
 
 def backup(source, dest, partSize, blockSize):
     if partSize % blockSize != 0:
@@ -144,13 +179,13 @@ def backup(source, dest, partSize, blockSize):
     
     queue = Queue()
     copyThread = CopyThread(source, dest, partSize, blockSize, queue)
-    compressThread = CompressThread(partSize, blockSize, queue)
+    compareThread = CompareThread(partSize, blockSize, queue)
     copyThread.start()
-    compressThread.start()
+    compareThread.start()
     
     copyThread.join()
-    compressThread.join()
-    sys.stdout.write("All done\n")
+    compareThread.join()
+    sys.stdout.write("Finished. Changed files: %s\n" % compareThread.changedFiles)
 
 
 def main():

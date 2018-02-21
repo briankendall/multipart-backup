@@ -117,14 +117,14 @@ def restore(backupPath, dest, blockSize):
                 
         if p.returncode != 0:
             sys.stderr.write('dd failed! Output:\n%s\n' % err)
-            raise DDError('dd failed on index %s with status %s' % (index, p.returncode))
+            raise DDError('dd failed on index %s with status %s' % (i, p.returncode))
         
         endTime = time.time()
         timings.append(endTime-startTime)
         
         if len(timings) >= timingSamples:
             timings = timings[-timingSamples:] 
-            averageSpeed = (partSize * timingSamples) / sum(timings)
+            averageSpeed = (backupPartSize * timingSamples) / sum(timings)
     
     sys.stdout.write("\nRestore completed\n")
         

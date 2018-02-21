@@ -6,6 +6,7 @@ import os
 import threading
 from queue import Queue
 import time
+import ctypes
 
 _nullBlock = '\0'
 
@@ -19,6 +20,8 @@ def isFileAllZeros(path, blockSize):
     if len(_nullBlock) != blockSize:
         _nullBlock = '\0' * blockSize
     
+    result = False
+    
     with open(path, 'rb') as f:
         while True:
             block = f.read(blockSize)
@@ -26,12 +29,14 @@ def isFileAllZeros(path, blockSize):
             if len(block) == 0:
                 break
             
+            result = True
+            
             if len(block) == blockSize and block != _nullBlock:
                 return False
             elif block != ('\0' * len(block)):
                 return False
     
-    return True
+    return result
 
 def areFilesIdentical(path1, path2, blockSize):
     with open(path1, 'rb') as f1:
@@ -57,6 +62,29 @@ def humanReadableSize(bytes):
         return '%.1fM' % (bytes / (1024*1024))
     else:
         return '%.1fG' % (bytes / (1024*1024*1024))
+
+def humanReadableSizeToBytes(value):
+    validSuffixes = {'b':512, 'k':1024, 'm':1048576, 'g':1073741824, 'w':ctypes.sizeof(ctypes.c_int)}
+    value = value.lower().strip()
+    
+    if value[-1] in validSuffixes:
+        numberPart = value[:-1]
+        suffix = value[-1]
+    else:
+        numberPart = value
+        suffix = None
+    
+    if numberPart.startswith('0x'):
+        number = int(numberPart, 16)
+    elif numberPart.startswith('0'):
+        number = int(numberPart, 8)
+    else:
+        number = int(numberPart, 10)
+    
+    if suffix is None:
+        return number
+    else:
+        return number * validSuffixes[suffix]
 
 def partPathAtIndex(dest, index):
     return os.path.join(dest, 'part_%08d' % index)
@@ -140,21 +168,23 @@ class CopyThread(threading.Thread):
             self.queue.put('')
 
 class CompareThread(threading.Thread):
-    def __init__(self, partSize, blockSize, queue):
+    def __init__(self, partSize, blockSize, keepNullParts, queue):
         super(CompareThread, self).__init__()
         self.queue = queue
         self.partSize = partSize
         self.blockSize = blockSize
+        self.keepNullParts = keepNullParts
         self.changedFiles = 0
     
-    def areOldAndNewPartsIdentical(self, prevPartPath, newPartPath):
+    def areOldAndNewPartsIdentical(self, prevPartPath, newPartPath, newPartIsAllZeros):
         newPartSize = os.stat(newPartPath).st_size
         prevPartSize = os.stat(prevPartPath).st_size
         
-        if prevPartSize == 0 and isFileAllZeros(newPartPath, self.blockSize):
+        if not self.keepNullParts and prevPartSize == 0 and newPartIsAllZeros:
             return True
         else:
-            return areFilesIdentical(prevPartPath, newPartPath, self.blockSize)
+            result = areFilesIdentical(prevPartPath, newPartPath, self.blockSize)
+            return result
     
     def run(self):
         while True:
@@ -163,10 +193,11 @@ class CompareThread(threading.Thread):
             if len(newPartPath) == 0:
                 break
             
+            newPartIsAllZeros = isFileAllZeros(newPartPath, self.blockSize)
             prevPartPath = os.path.splitext(newPartPath)[0]
             
             if os.path.exists(prevPartPath):
-                if self.areOldAndNewPartsIdentical(prevPartPath, newPartPath):
+                if self.areOldAndNewPartsIdentical(prevPartPath, newPartPath, newPartIsAllZeros):
                     os.remove(newPartPath)
                     continue
                 else:
@@ -179,7 +210,7 @@ class CompareThread(threading.Thread):
             if os.stat(prevPartPath).st_size != self.partSize:
                 continue
             
-            if isFileAllZeros(prevPartPath, self.blockSize):
+            if not self.keepNullParts and newPartIsAllZeros:
                 # Blank out file, signaling that its size is blockSize and it is all zeros
                 with open(prevPartPath, 'wb') as f:
                     pass
@@ -194,13 +225,13 @@ def removeExcessPartsInDestStartingAtIndex(dest, index):
     
     return deletedFiles
 
-def backup(source, dest, partSize, blockSize):
+def backup(source, dest, partSize, blockSize, keepNullParts):
     if partSize % blockSize != 0:
         raise ValueError('Part size must be integer multiple of block size')
     
     queue = Queue()
     copyThread = CopyThread(source, dest, partSize, blockSize, queue)
-    compareThread = CompareThread(partSize, blockSize, queue)
+    compareThread = CompareThread(partSize, blockSize, keepNullParts, queue)
     copyThread.start()
     compareThread.start()
     
@@ -216,16 +247,17 @@ def main():
     parser = argparse.ArgumentParser(description="Iteratively backup file or device to multi-part file")
     parser.add_argument('source', help="Source file or device")
     parser.add_argument('dest', help="Destination folder for multi-part backup")
+    parser.add_argument('-bs', '--block-size', help='Block size for dd and comparing files. Uses same format for sizes as dd.',
+                        type=str, default=str(1024*1024))
+    parser.add_argument('-ps', '--part-size', help='Size of each part of the backup. Uses same format for sizes as dd.',
+                        type=str, default=str(100*1024*1024))
+    parser.add_argument('-k', '--keep-null-parts', help='Keep parts that contain all zeros at full size', action='store_true')
     args = parser.parse_args()
-
-    # partSize = 100 * 1024 * 1024
-    # blockSize = 1024 * 1024
-    
-    partSize = 10
-    blockSize = 10
     
     try:
-        backup(args.source, args.dest, partSize, blockSize)
+        partSize = humanReadableSizeToBytes(args.part_size)
+        blockSize = humanReadableSizeToBytes(args.block_size)
+        backup(args.source, args.dest, partSize, blockSize, args.keep_null_parts)
     except ValueError as e:
         sys.stderr.write('Error: %s\n' % e)
         return 1

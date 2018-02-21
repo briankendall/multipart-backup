@@ -1,10 +1,33 @@
 from __future__ import division
-from subprocess import call, PIPE
+from subprocess import call, Popen, PIPE
 import argparse
 import sys
 import os
 import threading
 from queue import Queue
+
+_nullBlock = '\0'
+
+def isFileAllZeros(path, blockSize):
+    global _nullBlock
+    
+    # Quick optimization so that we don't have to recreate _nullBlock more than necessary
+    if len(_nullBlock) != blockSize:
+        _nullBlock = '\0' * blockSize
+    
+    with open(path, 'rb') as f:
+        while True:
+            block = f.read(blockSize)
+            
+            if len(block) == 0:
+                break
+            
+            if len(block) == blockSize and block != _nullBlock:
+                return False
+            elif block != ('\0' * len(block)):
+                return False
+    
+    return True
 
 class CopyThread(threading.Thread):
     def __init__(self, source, dest, partSize, blockSize, queue):
@@ -38,14 +61,19 @@ class CopyThread(threading.Thread):
                 break
             
             index += 1
+            
+            if index > 50:
+                break
         
         sys.stdout.write("Done copying!\n")
         self.queue.put('')
-    
+
 class CompressThread(threading.Thread):
-    def __init__(self, queue):
+    def __init__(self, partSize, blockSize, queue):
         super(CompressThread, self).__init__()
         self.queue = queue
+        self.partSize = partSize
+        self.blockSize = blockSize
     
     def run(self):
         while True:
@@ -54,9 +82,19 @@ class CompressThread(threading.Thread):
             if len(partPath) == 0:
                 break
             
-            sys.stdout.write('Processing: %s\n' % partPath)
-            call(['gzip', '-k', partPath])
+            sys.stdout.write('Checking if part is all zeros: %s\n' % partPath)
             
+            stats = os.stat(partPath)
+            
+            # Only want to consider files that are of size partSize
+            if stats.st_size != self.partSize:
+                continue
+            
+            if isFileAllZeros(partPath, self.blockSize):
+                sys.stdout.write('... %s is null!\n' % partPath)
+                
+                with open(partPath, 'wb') as f:
+                    pass
         
         sys.stdout.write("Done processing!\n")
         
@@ -67,7 +105,7 @@ def backup(source, dest, partSize, blockSize):
     
     queue = Queue()
     copyThread = CopyThread(source, dest, partSize, blockSize, queue)
-    compressThread = CompressThread(queue)
+    compressThread = CompressThread(partSize, blockSize, queue)
     copyThread.start()
     compressThread.start()
     

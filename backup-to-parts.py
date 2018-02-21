@@ -159,9 +159,6 @@ class CopyThread(threading.Thread):
                 if len(timings) >= timingSamples:
                     timings = timings[-timingSamples:] 
                     averageSpeed = (self.partSize * timingSamples) / sum(timings)
-                
-                if index > 50:
-                    break
             
             sys.stdout.write("\n")
         finally:
@@ -257,7 +254,8 @@ def main():
         partSize = humanReadableSizeToBytes(args.part_size)
         blockSize = humanReadableSizeToBytes(args.block_size)
         backup(args.source, args.dest, partSize, blockSize, args.keep_null_parts)
-    except ValueError as e:
+        return 0
+    except (DDError, ValueError) as e:
         sys.stderr.write('Error: %s\n' % e)
         return 1
 

@@ -242,7 +242,6 @@ def backup(source, dest, partSize, blockSize, keepNullParts):
     
     sys.stdout.write("Finished. Changed files: %s\n" % (compareThread.changedFiles + deletedFiles))
 
-
 def main():
     parser = argparse.ArgumentParser(description="Iteratively backup file or device to multi-part file")
     parser.add_argument('source', help="Source file or device")

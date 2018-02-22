@@ -229,28 +229,47 @@ def removeExcessPartsInDestStartingAtIndex(dest, index):
 
 def snapshotTimestamp():
     return "snapshot-%s" % datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    
+
+def inProgressSnapshotName():
+    return 'snapshot-inprogress'
+
 def isSnapshotDir(dirName):
-    return re.search(r"^snapshot-\d{4}-\d{2}-\d{2}-\d{6}$", dirName) is not None
+    return dirName == inProgressSnapshotName() or re.search(r"^snapshot-\d{4}-\d{2}-\d{2}-\d{6}$", dirName) is not None
 
 def previousSnapshots(destRoot):
     return map(lambda x: os.path.join(destRoot, x), sorted(filter(isSnapshotDir, os.listdir(destRoot))))
 
+def findIncompleteSnapshot(snapshots):
+    incompletes = filter(lambda x: os.path.basename(x) == inProgressSnapshotName(), snapshots)
+    
+    if len(incompletes) > 0:
+        return incompletes[0]
+    else:
+        return None
+
 def partsInSnapshot(dest):
     return sorted(filter(isPartFile, os.listdir(dest)))
+
+def createNewSnapshotWithLinksToOld(destRoot, lastSnapshot):
+    dest = os.path.join(destRoot, inProgressSnapshotName())
+    os.mkdir(dest)
+    
+    for part in partsInSnapshot(lastSnapshot):
+        os.link(os.path.join(lastSnapshot, part), os.path.join(dest, part))
+    
+    return dest
 
 def setupAndReturnDestination(destRoot, snapshotCount):
     if snapshotCount > 0:
         prevs = previousSnapshots(destRoot)
-        dest = os.path.join(destRoot, snapshotTimestamp())
-        os.mkdir(dest)
+        incompleteSnapshot = findIncompleteSnapshot(prevs)
         
-        if len(prevs) > 0:
+        if incompleteSnapshot is not None:
+            sys.stdout.write("NOTE: last snapshot is complete! Will attempt to finish it...\n")
+            dest = incompleteSnapshot
+        else:
             sys.stdout.write("Setting up new snapshot...\n")
-            lastSnapshot = prevs[-1]
-            
-            for part in partsInSnapshot(lastSnapshot):
-                os.link(os.path.join(lastSnapshot, part), os.path.join(dest, part))
+            dest = createNewSnapshotWithLinksToOld(destRoot, prevs[-1])
     else:
         dest = destRoot
         
@@ -282,6 +301,9 @@ def removeOldSnapshots(destRoot, snapshotCount):
             
             removeEmptyDirectoryEvenIfItHasAnAnnoyingDSStoreFileInIt(oldSnapshot)
 
+def renameSnapshotToFinalName(dest):
+    os.rename(dest, os.path.join(os.path.dirname(dest), snapshotTimestamp()))
+
 def backup(source, destRoot, partSize, blockSize, keepNullParts, snapshotCount):
     if partSize % blockSize != 0:
         raise ValueError('Part size must be integer multiple of block size')
@@ -297,6 +319,7 @@ def backup(source, destRoot, partSize, blockSize, keepNullParts, snapshotCount):
     compareThread.join()
     
     deletedFiles = removeExcessPartsInDestStartingAtIndex(dest, copyThread.totalParts)
+    renameSnapshotToFinalName(dest)
     
     if snapshotCount > 0:
         removeOldSnapshots(destRoot, snapshotCount)

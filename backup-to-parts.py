@@ -1,10 +1,11 @@
+#!/usr/bin/env python2.7
 from __future__ import division
 from subprocess import call, Popen, PIPE
 import argparse
 import sys
 import os
 import threading
-from queue import Queue
+from multiprocessing import Queue
 import datetime
 import re
 from shared import (BackupError, DDError, AverageSpeedCalculator, outputStatus, humanReadableSize,

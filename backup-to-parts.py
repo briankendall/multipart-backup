@@ -7,6 +7,8 @@ import threading
 from queue import Queue
 import time
 import ctypes
+import datetime
+import re
 
 _nullBlock = '\0'
 
@@ -92,6 +94,9 @@ def partPathAtIndex(dest, index):
 def newPartPathAtIndex(dest, index):
     return os.path.join(dest, 'part_%08d.new' % index)
 
+def isPartFile(filename):
+    return len(filename) == 13 and filename.startswith('part_') and filename[-8:].isdigit()
+
 def outputStatus(str, lastSize):
     if len(str) < lastSize:
         str = str + (' ' * (lastSize-len(str)))
@@ -156,9 +161,9 @@ class CopyThread(threading.Thread):
                 endTime = time.time()
                 timings.append(endTime-startTime)
                 
-                if len(timings) >= timingSamples:
+                if len(timings) > 0:
                     timings = timings[-timingSamples:] 
-                    averageSpeed = (self.partSize * timingSamples) / sum(timings)
+                    averageSpeed = (self.partSize * len(timings)) / sum(timings)
             
             sys.stdout.write("\n")
         finally:
@@ -222,10 +227,66 @@ def removeExcessPartsInDestStartingAtIndex(dest, index):
     
     return deletedFiles
 
-def backup(source, dest, partSize, blockSize, keepNullParts):
+def snapshotTimestamp():
+    return "snapshot-%s" % datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    
+def isSnapshotDir(dirName):
+    return re.search(r"^snapshot-\d{4}-\d{2}-\d{2}-\d{6}$", dirName) is not None
+
+def previousSnapshots(destRoot):
+    return map(lambda x: os.path.join(destRoot, x), sorted(filter(isSnapshotDir, os.listdir(destRoot))))
+
+def partsInSnapshot(dest):
+    return sorted(filter(isPartFile, os.listdir(dest)))
+
+def setupAndReturnDestination(destRoot, snapshotCount):
+    if snapshotCount > 0:
+        prevs = previousSnapshots(destRoot)
+        dest = os.path.join(destRoot, snapshotTimestamp())
+        os.mkdir(dest)
+        
+        if len(prevs) > 0:
+            sys.stdout.write("Setting up new snapshot...\n")
+            lastSnapshot = prevs[-1]
+            
+            for part in partsInSnapshot(lastSnapshot):
+                os.link(os.path.join(lastSnapshot, part), os.path.join(dest, part))
+    else:
+        dest = destRoot
+        
+    return dest
+
+def removeEmptyDirectoryEvenIfItHasAnAnnoyingDSStoreFileInIt(dir):
+    try:
+        os.rmdir(dir)
+        return
+    except OSError:
+        if os.path.exists(os.path.join(dir, '.DS_Store')):
+            os.remove(os.path.join(dir, '.DS_Store'))
+            
+            try:
+                os.rmdir(dir)
+            except OSError:
+                pass
+
+def removeOldSnapshots(destRoot, snapshotCount):
+    prevs = previousSnapshots(destRoot)
+    snapshotsToRemove = prevs[:-snapshotCount]
+    
+    if len(snapshotsToRemove) > 0:
+        sys.stdout.write("Removing old snapshots...\n")
+        
+        for oldSnapshot in snapshotsToRemove:
+            for part in partsInSnapshot(oldSnapshot):
+                os.remove(os.path.join(oldSnapshot, part))
+            
+            removeEmptyDirectoryEvenIfItHasAnAnnoyingDSStoreFileInIt(oldSnapshot)
+
+def backup(source, destRoot, partSize, blockSize, keepNullParts, snapshotCount):
     if partSize % blockSize != 0:
         raise ValueError('Part size must be integer multiple of block size')
     
+    dest = setupAndReturnDestination(destRoot, snapshotCount)
     queue = Queue()
     copyThread = CopyThread(source, dest, partSize, blockSize, queue)
     compareThread = CompareThread(partSize, blockSize, keepNullParts, queue)
@@ -237,7 +298,10 @@ def backup(source, dest, partSize, blockSize, keepNullParts):
     
     deletedFiles = removeExcessPartsInDestStartingAtIndex(dest, copyThread.totalParts)
     
-    sys.stdout.write("Finished. Changed files: %s\n" % (compareThread.changedFiles + deletedFiles))
+    if snapshotCount > 0:
+        removeOldSnapshots(destRoot, snapshotCount)
+    
+    sys.stdout.write("Finished! Changed files: %s\n" % (compareThread.changedFiles + deletedFiles))
 
 def main():
     parser = argparse.ArgumentParser(description="Iteratively backup file or device to multi-part file")
@@ -248,12 +312,13 @@ def main():
     parser.add_argument('-ps', '--part-size', help='Size of each part of the backup. Uses same format for sizes as dd.',
                         type=str, default=str(100*1024*1024))
     parser.add_argument('-k', '--keep-null-parts', help='Keep parts that contain all zeros at full size', action='store_true')
+    parser.add_argument('-s', '--snapshots', type=int, default=4, help='Number of snapshots to maintain. Default is 4.') 
     args = parser.parse_args()
     
     try:
         partSize = humanReadableSizeToBytes(args.part_size)
         blockSize = humanReadableSizeToBytes(args.block_size)
-        backup(args.source, args.dest, partSize, blockSize, args.keep_null_parts)
+        backup(args.source, args.dest, partSize, blockSize, args.keep_null_parts, args.snapshots)
         return 0
     except (DDError, ValueError) as e:
         sys.stderr.write('Error: %s\n' % e)

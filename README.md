@@ -62,7 +62,7 @@ Block size used with `dd`. Defaults to 1 MB.
 
 ##### Example:
 
-    restore-from-parts -bs 1m /Volumes/Backups/external-drive-backup/snapshot-2018-04-20-001337
+    restore-from-parts.py -bs 1m /Volumes/Backups/external-drive-backup/snapshot-2018-04-20-001337 /dev/rdisk4s1
 
 ### Sizes
 

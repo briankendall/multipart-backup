@@ -3,6 +3,9 @@ import sys
 import ctypes
 import os
 import time
+from subprocess import check_output
+import platform
+import uuid
 
 _outputStatusLastSize = 0
 
@@ -13,6 +16,9 @@ class DDError(Exception):
     pass
     
 class BackupError(Exception):
+    pass
+    
+class UnimplementedPlatformError(Exception):
     pass
 
 class AverageSpeedCalculator(object):
@@ -89,3 +95,51 @@ def isPartFile(filename):
 
 def partsInSnapshot(dest):
     return sorted(filter(isPartFile, os.listdir(dest)))
+
+def normalizeUUID(uuidString):
+    return str(uuid.UUID(uuidString)).lower()
+
+def findDiskDeviceIdentifierByUUIDMacOS(uuidString):
+    import plistlib
+    
+    diskUtilPlistData = check_output(['diskutil', 'list', '-plist'])
+    diskUtilData = plistlib.readPlistFromString(diskUtilPlistData)
+    allDisksAndPartitions = diskUtilData['AllDisksAndPartitions']
+    
+    def findDiskUUIDInList(partitionList, targetUUIDString):
+        for partition in partitionList:
+            if partition['DiskUUID'].lower() == targetUUIDString:
+                # Want to provide the unbuffered device identifier for better performance, hence the r
+                return '/dev/r' + partition['DeviceIdentifier']
+        
+        return None
+    
+    for data in allDisksAndPartitions:
+        if 'Partitions' in data:
+            result = findDiskUUIDInList(data['Partitions'], uuidString)
+            
+            if result is not None:
+                return result
+                
+        if 'APFSVolumes' in data:
+            result = findDiskUUIDInList(data['APFSVolumes'], uuidString)
+            
+            if result is not None:
+                return result
+    
+    return None
+
+def findDiskDeviceIdentifierByUUID(uuidString):
+    uuidString = normalizeUUID(uuidString)
+    
+    if platform.system() == 'Darwin':
+        return findDiskDeviceIdentifierByUUIDMacOS(uuidString)
+    else:
+        raise UnimplementedPlatformError('Finding a device by UUID is not implemented for platform: %s' % platform.system())
+
+def isUUID(uuidString):
+    try:
+        uuid.UUID(uuidString)
+        return True
+    except ValueError:
+        return False

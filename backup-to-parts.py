@@ -9,7 +9,7 @@ from multiprocessing import Queue
 import datetime
 import re
 from shared import (BackupError, DDError, AverageSpeedCalculator, outputStatus, humanReadableSize,
-                    humanReadableSizeToBytes, partsInSnapshot)
+                    humanReadableSizeToBytes, partsInSnapshot, findDiskDeviceIdentifierByUUID, isUUID)
 
 _nullBlock = '\0'
 
@@ -287,10 +287,25 @@ def removeOldSnapshots(destRoot, snapshotCount):
 def renameSnapshotToFinalName(dest):
     os.rename(dest, os.path.join(os.path.dirname(dest), snapshotTimestamp()))
 
-def backup(source, destRoot, partSize, blockSize, keepNullParts, snapshotCount):
+def deviceIdentifierForSourceString(source, sourceIsUUID):
+    if sourceIsUUID:
+        result = findDiskDeviceIdentifierByUUID(source)
+        
+        if result is None:
+            raise ValueError('Could not find a partition with UUID: %s' % source)
+
+        return result
+        
+    elif os.path.exists(source):
+        return source
+    else:
+        raise ValueError('"%s" is not a valid device identifier or file' % source)
+
+def backup(sourceString, sourceIsUUID, destRoot, partSize, blockSize, keepNullParts, snapshotCount):
     if partSize % blockSize != 0:
         raise ValueError('Part size must be integer multiple of block size')
     
+    source = deviceIdentifierForSourceString(sourceString, sourceIsUUID)
     dest = setupAndReturnDestination(destRoot, snapshotCount)
     queue = Queue()
     copyThread = CopyThread(source, dest, partSize, blockSize, queue)
@@ -315,7 +330,7 @@ def backup(source, destRoot, partSize, blockSize, keepNullParts, snapshotCount):
 
 def main():
     parser = argparse.ArgumentParser(description="Iteratively backup file or device to multi-part file")
-    parser.add_argument('source', help="Source file or device")
+    parser.add_argument('source', help="Source file, device identifier, or partition UUID")
     parser.add_argument('dest', help="Destination folder for multi-part backup")
     parser.add_argument('-bs', '--block-size', help='Block size for dd and comparing files. Uses same format for sizes '
                         'as dd. Defaults to 1 MB.', type=str, default=str(1024*1024))
@@ -324,12 +339,13 @@ def main():
     parser.add_argument('-k', '--keep-null-parts', help='Keep parts that contain all zeros at full size',
                         action='store_true')
     parser.add_argument('-s', '--snapshots', type=int, default=4, help='Number of snapshots to maintain. Default is 4.') 
+    parser.add_argument('-u', '--uuid', help='Indicates source is a partition UUID', action='store_true') 
     args = parser.parse_args()
     
     try:
         partSize = humanReadableSizeToBytes(args.part_size)
         blockSize = humanReadableSizeToBytes(args.block_size)
-        backup(args.source, args.dest, partSize, blockSize, args.keep_null_parts, args.snapshots)
+        backup(args.source, args.uuid, args.dest, partSize, blockSize, args.keep_null_parts, args.snapshots)
         return 0
     except (DDError, ValueError, BackupError) as e:
         sys.stderr.write('Error: %s\n' % e)

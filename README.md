@@ -29,7 +29,7 @@ The script can also optionally be used to create snapshots, where each backup is
 
     backup-to-parts.py [arguments] source backup-root
 
-* source: the file or device to backup, e.g. `/dev/rdisk1s2` or `/dev/sda2`
+* source: the file or device to backup, e.g. `/dev/rdisk1s2` or `/dev/sda2`. Can also be a partition UUID when `-u` is specified.
 
 * backup-root: the path to the folder that will contain the backup
 
@@ -44,6 +44,9 @@ The default behavior is any part of the backup that contains no data other than 
 
 * `-s COUNT` `--snapshots COUNT`    
 Specifies how many snapshots are kept in the backup root. When set to 1 or higher, the script will create the snapshot folders in the backup root named with a timestamp. When set to 0, no snapshots are made and the backup root just contains all of the parts. The default is 4.
+
+* `-u` `--uuid`    
+Specifies that source is a partition UUID rather than a file or device identifier.
 
 ##### Example:
 
@@ -87,7 +90,7 @@ Maybe it will be of use to someone else!
 
 ### Issues and future work
 
-- Doesn't yet have a way to specify partitions by GUID, but probably will eventually.
+- Doesn't yet have a way to restore to a partition by UUID, but probably will eventually.
 
 - Not sure if it's Python 3 compatible, but I may go out of my way to ensure that in the future.
 

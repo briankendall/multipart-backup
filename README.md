@@ -90,6 +90,8 @@ Maybe it will be of use to someone else!
 
 ### Issues and future work
 
+- Specifying partition UUID doesn't work in Linux
+
 - Doesn't yet have a way to restore to a partition by UUID, but probably will eventually.
 
 - Not sure if it's Python 3 compatible, but I may go out of my way to ensure that in the future.

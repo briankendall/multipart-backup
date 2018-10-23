@@ -108,7 +108,9 @@ def findDiskDeviceIdentifierByUUIDMacOS(uuidString):
     
     def findDiskUUIDInList(partitionList, targetUUIDString):
         for partition in partitionList:
-            if partition['DiskUUID'].lower() == targetUUIDString:
+            matches = (('DiskUUID' in partition and partition['DiskUUID'].lower() == targetUUIDString) or
+                       ('VolumeUUID' in partition and partition['VolumeUUID'].lower() == targetUUIDString))
+            if matches:
                 # Want to provide the unbuffered device identifier for better performance, hence the r
                 return '/dev/r' + partition['DeviceIdentifier']
         

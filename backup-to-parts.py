@@ -64,127 +64,71 @@ def newPartPathAtIndex(dest, index):
     yet been compared to an existing part to see if they're identical or if the new part contains all zeros"""
     return os.path.join(dest, 'part_%08d.new' % index)
 
-class CopyThread(threading.Thread):
-    """Thread that copies source into dest in partSize chunks. Each part that finishes copying is appended to queue for
-    processing in another thread."""
+def copyPartToDisk(source, dest, partSize, blockSize, index, speedCalculator):
+    """Copies source into dest in partSize chunks. Returns the path of the newly created part, or None if the part
+    was within partSize-1 bytes of the end of source and there are no more parts to copy."""
+    partBlockCount = partSize // blockSize
+    partPath = newPartPathAtIndex(dest, index)
     
-    def __init__(self, source, dest, partSize, blockSize, queue):
-        super(CopyThread, self).__init__()
-        self.source = source
-        self.dest = dest
-        self.partSize = partSize
-        self.blockSize = blockSize
-        self.queue = queue
-        self.totalParts = 0
-        self.error = False
+    if speedCalculator.averageSpeed() is not None:
+        outputStatus("Copying part %s ... speed: %s/sec" %
+                     (index+1, humanReadableSize(speedCalculator.averageSpeed())))
+    else:
+        outputStatus("Copying part %s ..." % (index+1))
     
-    def run(self):
-        try:
-            speedCalculator = AverageSpeedCalculator(5)
-            partBlockCount = self.partSize // self.blockSize
-            index = 0
-            
-            while True:
-                speedCalculator.startOfCycle()
-                partPath = newPartPathAtIndex(self.dest, index)
-                
-                if speedCalculator.averageSpeed() is not None:
-                    outputStatus("Copying part %s ... speed: %s/sec" %
-                                 (index+1, humanReadableSize(speedCalculator.averageSpeed())))
-                else:
-                    outputStatus("Copying part %s ..." % (index+1))
-                
-                p = Popen(['dd', 'if=%s' % self.source, 'of=%s' % partPath, 'bs=%s' % self.blockSize,
-                           'count=%s' % partBlockCount, 'skip=%s' % (index*partBlockCount)],
-                          stdout=PIPE, stderr=PIPE)
-                out, err = p.communicate()
-                
-                if p.returncode != 0:
-                    sys.stderr.write('dd failed! Output:\n%s\n' % err)
-                    raise DDError('dd failed on index %s with status %s' % (index, p.returncode))
-                
-                partSize = os.stat(partPath).st_size
-                
-                # If the part size is zero, that means we've gone past the end of the file or device we're copying and
-                # we need to stop
-                if partSize == 0:
-                    os.remove(partPath)
-                    break
-                
-                self.totalParts += 1
-                self.queue.put(partPath)
-                
-                # If the size of this part is not equal to the target size, that means we've hit the end of the file or
-                # device that we're copying.
-                if partSize != self.partSize:
-                    break
-                
-                index += 1
-                speedCalculator.endOfCycle(partSize)
-            
-            sys.stdout.write("\n")
-        except:
-            self.error = True
-            raise
-        finally:
-            self.queue.put('')
+    p = Popen(['dd', 'if=%s' % source, 'of=%s' % partPath, 'bs=%s' % blockSize,
+               'count=%s' % partBlockCount, 'skip=%s' % (index*partBlockCount)],
+              stdout=PIPE, stderr=PIPE)
+    out, err = p.communicate()
+    
+    if p.returncode != 0:
+        sys.stderr.write('dd failed! Output:\n%s\n' % err)
+        raise DDError('dd failed on index %s with status %s' % (index, p.returncode))
+    
+    newPartSize = os.stat(partPath).st_size
+    
+    # If the part size is zero, that means we've gone past the end of the file or device we're copying and
+    # we need to stop
+    if newPartSize == 0:
+        os.remove(partPath)
+        return None
+    elif newPartSize != partSize:
+        return None
+    else:
+        return partPath
 
-class CompareThread(threading.Thread):
-    """Thread that compares freshly completed parts to the previously existing parts (if any exist) as well as checking
+def compareNewPart(newPartPath, partSize, blockSize, keepNullParts):
+    """Compares a freshly completed part to the previously existing part (if one exists) as well as checking
     if the part is all zeros"""
-    
-    def __init__(self, partSize, blockSize, keepNullParts, queue):
-        super(CompareThread, self).__init__()
-        self.queue = queue
-        self.partSize = partSize
-        self.blockSize = blockSize
-        self.keepNullParts = keepNullParts
-        self.changedFiles = 0
-        self.error = False
-    
-    def areOldAndNewPartsIdentical(self, prevPartPath, newPartPath, newPartIsAllZeros):
+    def areOldAndNewPartsIdentical(prevPartPath, newPartPath, newPartIsAllZeros):
         newPartSize = os.stat(newPartPath).st_size
         prevPartSize = os.stat(prevPartPath).st_size
         
-        if not self.keepNullParts and prevPartSize == 0 and newPartIsAllZeros:
+        if not keepNullParts and prevPartSize == 0 and newPartIsAllZeros:
             return True
         else:
-            result = areFilesIdentical(prevPartPath, newPartPath, self.blockSize)
+            result = areFilesIdentical(prevPartPath, newPartPath, blockSize)
             return result
     
-    def run(self):
-        try:
-            while True:
-                newPartPath = self.queue.get()
-                
-                if len(newPartPath) == 0:
-                    # Signals that we're done and the thread can exit
-                    break
-                
-                newPartIsAllZeros = isFileAllZeros(newPartPath, self.blockSize)
-                prevPartPath = os.path.splitext(newPartPath)[0]
-                
-                if os.path.exists(prevPartPath):
-                    if self.areOldAndNewPartsIdentical(prevPartPath, newPartPath, newPartIsAllZeros):
-                        os.remove(newPartPath)
-                        continue
-                    else:
-                        os.remove(prevPartPath)
-                
-                os.rename(newPartPath, prevPartPath)
-                self.changedFiles += 1
-                
-                # Only want to consider files that are of size partSize
-                if os.stat(prevPartPath).st_size != self.partSize:
-                    continue
-                
-                if not self.keepNullParts and newPartIsAllZeros:
-                    # Blank out file, signaling that its size is blockSize and it is all zeros
-                    with open(prevPartPath, 'wb') as f:
-                        pass
-        except:
-            self.error = True
-            raise
+    newPartIsAllZeros = isFileAllZeros(newPartPath, blockSize)
+    prevPartPath = os.path.splitext(newPartPath)[0]
+    
+    if os.path.exists(prevPartPath):
+        if areOldAndNewPartsIdentical(prevPartPath, newPartPath, newPartIsAllZeros):
+            os.remove(newPartPath)
+            return False
+        else:
+            os.remove(prevPartPath)
+    
+    os.rename(newPartPath, prevPartPath)
+    
+    # Only want to consider files that are of size partSize
+    if os.stat(prevPartPath).st_size == partSize and not keepNullParts and newPartIsAllZeros:
+        # Blank out file, signaling that its size is blockSize and it is all zeros
+        with open(prevPartPath, 'wb') as f:
+            pass
+    
+    return True
 
 def removeExcessPartsInDestStartingAtIndex(dest, index):
     """Used to remove parts that are no longer needed for the given backup destination."""
@@ -307,26 +251,34 @@ def backup(sourceString, sourceIsUUID, destRoot, partSize, blockSize, keepNullPa
     
     source = deviceIdentifierForSourceString(sourceString, sourceIsUUID)
     dest = setupAndReturnDestination(destRoot, snapshotCount)
-    queue = Queue()
-    copyThread = CopyThread(source, dest, partSize, blockSize, queue)
-    compareThread = CompareThread(partSize, blockSize, keepNullParts, queue)
-    copyThread.start()
-    compareThread.start()
+    speedCalculator = AverageSpeedCalculator(5)
     
-    copyThread.join()
-    compareThread.join()
+    partIndex = 0
+    changedFiles = 0
     
-    if copyThread.error or compareThread.error:
-        raise BackupError('The backup failed to complete')
+    while True:
+        speedCalculator.startOfCycle()
+        newPartPath = copyPartToDisk(source, dest, partSize, blockSize, partIndex, speedCalculator)
+        
+        if newPartPath is None:
+            break
+        
+        fileChanged = compareNewPart(newPartPath, partSize, blockSize, keepNullParts)
+        
+        if fileChanged:
+            changedFiles += 1
+        
+        partIndex += 1
+        speedCalculator.endOfCycle(partSize)
     
-    deletedFiles = removeExcessPartsInDestStartingAtIndex(dest, copyThread.totalParts)
+    deletedFiles = removeExcessPartsInDestStartingAtIndex(dest, partIndex)
     renameSnapshotToFinalName(dest)
     
     if snapshotCount > 0:
         removeOldSnapshots(destRoot, snapshotCount)
     
-    sys.stdout.write("Finished! Changed files: %s\n" %
-                     (compareThread.changedFiles + deletedFiles))
+    sys.stdout.write("\n")
+    sys.stdout.write("Finished! Changed files: %s\n" % (changedFiles + deletedFiles))
 
 def main():
     parser = argparse.ArgumentParser(description="Iteratively backup file or device to multi-part file")

@@ -91,11 +91,9 @@ def copyPartToDisk(source, dest, partSize, blockSize, index, speedCalculator):
     # we need to stop
     if newPartSize == 0:
         os.remove(partPath)
-        return None
-    elif newPartSize != partSize:
-        return None
+        return (None, 0)
     else:
-        return partPath
+        return (partPath, newPartSize)
 
 def compareNewPart(newPartPath, partSize, blockSize, keepNullParts):
     """Compares a freshly completed part to the previously existing part (if one exists) as well as checking
@@ -258,7 +256,7 @@ def backup(sourceString, sourceIsUUID, destRoot, partSize, blockSize, keepNullPa
     
     while True:
         speedCalculator.startOfCycle()
-        newPartPath = copyPartToDisk(source, dest, partSize, blockSize, partIndex, speedCalculator)
+        newPartPath, newPartSize = copyPartToDisk(source, dest, partSize, blockSize, partIndex, speedCalculator)
         
         if newPartPath is None:
             break
@@ -270,6 +268,10 @@ def backup(sourceString, sourceIsUUID, destRoot, partSize, blockSize, keepNullPa
         
         partIndex += 1
         speedCalculator.endOfCycle(partSize)
+        
+        if newPartSize != partSize:
+            # We've hit the final part
+            break
     
     deletedFiles = removeExcessPartsInDestStartingAtIndex(dest, partIndex)
     renameSnapshotToFinalName(dest)

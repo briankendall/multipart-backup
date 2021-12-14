@@ -27,7 +27,8 @@ The script can also optionally be used to create snapshots, where each backup is
 
 ### Usage for backing up:
 
-    backup-to-parts.py [arguments] source backup-root
+    backup-to-parts.py [-h] [-bs BLOCK_SIZE] [-ps PART_SIZE] [-k]
+                       [-s SNAPSHOTS] [-u] source backup-root
 
 * source: the file or device to backup, e.g. `/dev/rdisk1s2` or `/dev/sda2`. Can also be a partition UUID when `-u` is specified.
 
@@ -48,13 +49,16 @@ Specifies how many snapshots are kept in the backup root. When set to 1 or highe
 * `-u` `--uuid`    
 Specifies that source is a partition UUID rather than a file or device identifier.
 
+* `-h` `--help`    
+Displays usage information 
+
 ##### Example:
 
     backup-to-parts.py -ps 50m -bs 1m -s 10 /dev/rdisk4s1 /Volumes/Backups/external-drive-backup/
 
 ### Usage for restoring:
 
-    restore-from-parts.py [arguments] snapshot-path destination
+    restore-from-parts.py [-h] [-bs BLOCK_SIZE] [-s START] [-v] snapshot-path destination
     
 * snapshot-path: path to a folder containing all of the parts of a backup. When `-s` is non-zero when creating the backup, this is the path to a particular snapshot, otherwise it's the path to the backup root itself.
 
@@ -62,6 +66,12 @@ Specifies that source is a partition UUID rather than a file or device identifie
 
 * `-bs SIZE` `--block-size SIZE`    
 Block size used with `dd`. Defaults to 1 MB.
+
+* `-s START` `--start START`    
+Index of the part to start with when writing to the destination. The part is still written to the correct point on the drive as though restoration started with the first part. Useful to resume a restoration that has been stopped partway through.
+
+* `-h` `--help`    
+Displays usage information 
 
 ##### Example:
 

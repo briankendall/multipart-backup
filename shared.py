@@ -8,6 +8,7 @@ import platform
 import uuid
 
 _outputStatusLastSize = 0
+_outputStatusDontReplaceLine = False
 
 class BackupDataError(Exception):
     pass
@@ -45,6 +46,10 @@ class AverageSpeedCalculator(object):
 
 def outputStatus(str):
     """Prints a line to the console that overwrites the previous line, allowing for status updates."""
+    if _outputStatusDontReplaceLine:
+        sys.stdout.write(str + '\n')
+        return
+    
     global _outputStatusLastSize
     
     if len(str) < _outputStatusLastSize:

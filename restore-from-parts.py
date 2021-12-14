@@ -4,8 +4,11 @@ import argparse
 from subprocess import call, Popen, PIPE
 import os
 import sys
+import shared
 from shared import (BackupDataError, DDError, AverageSpeedCalculator, outputStatus, humanReadableSize,
                     humanReadableSizeToBytes, partsInSnapshot)
+
+verbose = False
 
 def checkPartsAndGetPartSize(backupPath, parts, blockSize):
     """Checks to make sure all the parts in the given backup are a consistent size, and returns that size."""
@@ -32,7 +35,7 @@ def checkPartsAndGetPartSize(backupPath, parts, blockSize):
     
     return backupPartSize
 
-def restore(backupPath, dest, blockSize):
+def restore(backupPath, dest, blockSize, startPartIndex):
     parts = partsInSnapshot(backupPath)
     backupPartSize = checkPartsAndGetPartSize(backupPath, parts, blockSize)
     
@@ -42,17 +45,17 @@ def restore(backupPath, dest, blockSize):
     partBlockCount = backupPartSize // blockSize
     speedCalculator = AverageSpeedCalculator(5)
     
-    for i in xrange(len(parts)):
+    for i in xrange(startPartIndex, len(parts)):
         speedCalculator.startOfCycle()
         
         partPath = os.path.join(backupPath, parts[i])
         partSize = os.stat(partPath).st_size
         
         if speedCalculator.averageSpeed() is not None:
-            outputStatus("Restoring part %s ... speed: %s/sec" %
-                         (i+1, humanReadableSize(speedCalculator.averageSpeed())))
+            outputStatus("Restoring part index %s ... speed: %s/sec" %
+                         (i, humanReadableSize(speedCalculator.averageSpeed())))
         else:
-            outputStatus("Restoring part %s ..." % (i+1))
+            outputStatus("Restoring part index %s ..." % i)
         
         if partSize == 0:
             # If the file size is 0, that indicates that it was a full size part that contained only zeros, so we
@@ -61,9 +64,14 @@ def restore(backupPath, dest, blockSize):
         else:
             partPathToUse = partPath
         
-        p = Popen(['dd', 'if=%s' % partPathToUse, 'of=%s' % dest, 'bs=%s' % blockSize, 'count=%s' % partBlockCount,
-                  'oseek=%s' % (i*partBlockCount)], stdout=PIPE, stderr=PIPE)
-        out, err = p.communicate()
+        if verbose:
+            p = Popen(['dd', 'if=%s' % partPathToUse, 'of=%s' % dest, 'bs=%s' % blockSize, 'count=%s' % partBlockCount,
+                      'oseek=%s' % (i*partBlockCount)])
+            p.communicate()
+        else:
+            p = Popen(['dd', 'if=%s' % partPathToUse, 'of=%s' % dest, 'bs=%s' % blockSize, 'count=%s' % partBlockCount,
+                      'oseek=%s' % (i*partBlockCount)], stdout=PIPE, stderr=PIPE)
+            out, err = p.communicate()
                 
         if p.returncode != 0:
             sys.stderr.write('dd failed! Output:\n%s\n' % err)
@@ -74,16 +82,23 @@ def restore(backupPath, dest, blockSize):
     sys.stdout.write("\nRestore completed\n")
 
 def main():
+    global verbose
     parser = argparse.ArgumentParser(description="Iteratively backup file or device to multi-part file")
     parser.add_argument('backup', help="Folder containing multi-part backup")
     parser.add_argument('dest', help="Destination file or device")
     parser.add_argument('-bs', '--block-size', help='Block size for dd and comparing files. Uses same format for sizes '
                         'as dd. Defaults to 1MB.', type=str, default=str(1024*1024))
+    parser.add_argument('-s', '--start', help='Index of starting part', type=str, default=str(0))
+    parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
     
     try:
+        verbose = args.verbose
+        shared._outputStatusDontReplaceLine = verbose
+        startPartIndex = int(args.start)
+        
         blockSize = humanReadableSizeToBytes(args.block_size)
-        restore(args.backup, args.dest, blockSize)
+        restore(args.backup, args.dest, blockSize, startPartIndex)
         return 0
     except (DDError, BackupDataError) as e:
         sys.stderr.write('Error: %s\n' % e.message)

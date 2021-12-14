@@ -147,7 +147,7 @@ def inProgressSnapshotName():
 
 def isSnapshotDir(dirName):
     return (dirName == inProgressSnapshotName() or
-            re.search(r"^snapshot-\d{4}-\d{2}-\d{2}-\d{6}$", dirName) is not None)
+            re.search(r"^snapshot-\d{4}-\d{2}-\d{2}-\d{6}", dirName) is not None)
 
 def previousSnapshots(destRoot):
     return map(lambda x: os.path.join(destRoot, x),

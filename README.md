@@ -50,7 +50,7 @@ Specifies that source is a partition UUID rather than a file or device identifie
 
 ##### Example:
 
-    backup-to-parts.py -ps 50m -bs 1m -c 10 /dev/rdisk4s1 /Volumes/Backups/external-drive-backup/
+    backup-to-parts.py -ps 50m -bs 1m -s 10 /dev/rdisk4s1 /Volumes/Backups/external-drive-backup/
 
 ### Usage for restoring:
 
